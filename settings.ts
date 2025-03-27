@@ -10,6 +10,7 @@ export interface DynamicFolderDashSettings {
     customCSS: string;
     triggerMode: 'command-only' | 'alt-click' | 'ctrl-click' | 'shift-click';
     hideNotesInExplorer: boolean;
+    welcomeMessage: string; // New setting for welcome message
 }
 
 export const DEFAULT_SETTINGS: DynamicFolderDashSettings = {
@@ -20,7 +21,8 @@ export const DEFAULT_SETTINGS: DynamicFolderDashSettings = {
     showFileModificationDate: false,
     customCSS: '',
     triggerMode: 'command-only',
-    hideNotesInExplorer: true
+    hideNotesInExplorer: true,
+    welcomeMessage: '*This is a dynamic dashboard for the "{folder}" folder.*' // Default message with placeholder
 }
 
 export class DynamicFolderDashSettingTab extends PluginSettingTab {
@@ -97,6 +99,19 @@ export class DynamicFolderDashSettingTab extends PluginSettingTab {
                     await this.plugin.saveSettings();
                     this.plugin.updateAllDashboards();
                 }));
+        
+        // Default welcome message
+        new Setting(containerEl)
+            .setName('Default welcome message')
+            .setDesc('Template for the welcome message shown at the top of new dashboards. Use {folder} to insert the folder name.')
+            .addTextArea(text => text
+                .setValue(this.plugin.settings.welcomeMessage)
+                .onChange(async (value) => {
+                    this.plugin.settings.welcomeMessage = value;
+                    await this.plugin.saveSettings();
+                })
+            )
+            .setClass('welcome-message-setting');
                 
         // Metadata Settings
         containerEl.createEl('h3', {text: 'Metadata Settings'});

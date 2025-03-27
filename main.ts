@@ -7,9 +7,42 @@ export default class DynamicFolderDash extends Plugin {
     dashboardManager: DashboardManager;
     customStyleEl: HTMLStyleElement;
     folderClickHandler: (event: MouseEvent) => void;
+    private pendingUpdates: Map<string, number> = new Map();
+    private updateDebounceMs = 500;  // Milliseconds to wait before updating
 
     async onload() {
         await this.loadSettings();
+
+        // Render folder content at display time
+        this.registerMarkdownCodeBlockProcessor('dynamic-folder', async (source, el, ctx) => {
+            // Get the current folder from the file's context
+            const file = this.app.vault.getFileByPath(ctx.sourcePath);
+            if (!file) return;
+            
+            const folder = file.parent;
+            if (!folder) return;
+            
+            // Generate fresh HTML content
+            const content = document.createElement('div');
+            content.className = `dynamic-folder-dash ${this.settings.viewType}`;
+            
+            // Generate actual content based on current folder state
+            switch (this.settings.viewType) {
+                case 'card-view':
+                    content.innerHTML = await this.generateCardView(folder);
+                    break;
+                case 'column-view':
+                    content.innerHTML = await this.generateColumnView(folder);
+                    break;
+                case 'simple-list':
+                default:
+                    content.innerHTML = await this.generateSimpleListView(folder);
+                    break;
+            }
+            
+            // Insert the content into the rendered document
+            el.appendChild(content);
+        });
         
         // Initialize dashboard manager
         this.dashboardManager = new DashboardManager(this.app, this);
@@ -32,6 +65,22 @@ export default class DynamicFolderDash extends Plugin {
                 }
             }
         });
+
+        // Register event listeners for file changes
+        this.registerEvent(
+            this.app.vault.on('create', (file: TAbstractFile) => this.handleFileChange(file))
+        );
+
+        this.registerEvent(
+            this.app.vault.on('delete', (file: TAbstractFile) => this.handleFileChange(file))
+        );
+
+        this.registerEvent(
+            this.app.vault.on('rename', (file: TAbstractFile, oldPath: string) => {
+                this.handleFileChange(file);
+                this.updateDashboardsForPath(oldPath);
+            })
+        );
         
         // Add CSS style element for custom CSS
         this.customStyleEl = document.createElement('style');
@@ -104,14 +153,27 @@ export default class DynamicFolderDash extends Plugin {
         // Checking if dashboard already exists
         const existingDashboard = this.app.vault.getAbstractFileByPath(dashboardPath);
         if (existingDashboard instanceof TFile) {
-            // Updating existing dashboard
-            await this.updateFolderDashboard(folder, existingDashboard);
+            // Just open the existing dashboard
             await this.app.workspace.getLeaf().openFile(existingDashboard);
             return;
         }
         
-        // Creating dashboard content
-        const content = await this.generateDashboardContent(folder);
+        // Process welcome message, replacing placeholders
+        let welcomeMessage = this.settings.welcomeMessage || '';
+        welcomeMessage = welcomeMessage.replace(/{folder}/g, folder.name);
+        
+        // Creating initial dashboard content with dynamic code block
+        let content = '';
+        
+        // Only add welcome message if it's not empty
+        if (welcomeMessage.trim()) {
+            content += `${welcomeMessage}\n\n`;
+        }
+        
+        // Add the dynamic code block
+        content += "```dynamic-folder\n" +
+                  "# This content updates automatically\n" +
+                  "```\n";
         
         // Creating new dashboard file
         const newDashboard = await this.app.vault.create(dashboardPath, content);
@@ -120,9 +182,27 @@ export default class DynamicFolderDash extends Plugin {
         await this.app.workspace.getLeaf().openFile(newDashboard);
     }
 
+    // Fix this function declaration
     async updateFolderDashboard(folder: TFolder, dashboardFile: TFile) {
-        const content = await this.generateDashboardContent(folder);
-        await this.app.vault.modify(dashboardFile, content);
+        const dashboardPath = dashboardFile.path;
+        
+        // Cancel any pending update for this dashboard
+        if (this.pendingUpdates.has(dashboardPath)) {
+            window.clearTimeout(this.pendingUpdates.get(dashboardPath));
+        }
+        
+        // Schedule a new update
+        const timeoutId = window.setTimeout(async () => {
+            // Generate new content and update the dashboard
+            const content = await this.generateDashboardContent(folder);
+            await this.app.vault.modify(dashboardFile, content);
+            
+            // Remove from pending updates
+            this.pendingUpdates.delete(dashboardPath);
+        }, this.updateDebounceMs);
+        
+        // Store the timeout ID
+        this.pendingUpdates.set(dashboardPath, timeoutId);
     }
 
     /**
@@ -392,17 +472,34 @@ export default class DynamicFolderDash extends Plugin {
         }
     }
 
-    handleFileChange(file: TFile | TFolder) {
+    // Method to trigger view refresh
+    handleFileChange(file: TAbstractFile) {
         // Find parent folder and update its dashboard if it exists
         const parentFolder = file.parent;
         if (!parentFolder) return;
         
+        // Update the dashboard for this folder
         const dashboardPath = `${parentFolder.path}/${parentFolder.name}.md`;
         const dashboardFile = this.app.vault.getAbstractFileByPath(dashboardPath);
         
         if (dashboardFile instanceof TFile) {
-            this.updateFolderDashboard(parentFolder, dashboardFile);
+            // Force refresh any open views of this dashboard
+            this.refreshOpenDashboardView(dashboardFile);
         }
+    }
+
+    //  Force re-rendering of open dashboards
+    refreshOpenDashboardView(dashboardFile: TFile) {
+        // Find any open leaves that are displaying this file
+        this.app.workspace.getLeavesOfType('markdown').forEach(leaf => {
+            if (leaf.view instanceof MarkdownView) {
+                // Check if this view is showing our dashboard
+                if (leaf.view.file && leaf.view.file.path === dashboardFile.path) {
+                    // Force a re-render of the view
+                    leaf.view.previewMode.rerender(true);
+                }
+            }
+        });
     }
 
     handleFileRename(file: TFile | TFolder, oldPath: string) {
@@ -649,7 +746,7 @@ export default class DynamicFolderDash extends Plugin {
             )?.parentElement;
             
             if (fileEl) {
-                // Add our class for styling/hiding
+                // Add class for styling/hiding
                 fileEl.addClass('is-dashboard-file');
             }
         }, 100);
@@ -677,5 +774,28 @@ export default class DynamicFolderDash extends Plugin {
         if (!(folder instanceof TFolder)) return null;
         
         return folder;
+    }
+
+    updateDashboardsForPath(path: string) {
+        // Find all possible affected folders
+        const pathParts = path.split('/');
+        let currentPath = '';
+        
+        // Check each parent folder in the path
+        for (const part of pathParts) {
+            if (currentPath) {
+                currentPath += '/';
+            }
+            currentPath += part;
+            
+            // Check if this folder has a dashboard
+            const dashboardPath = `${currentPath}/${part}.md`;
+            const dashboardFile = this.app.vault.getAbstractFileByPath(dashboardPath);
+            const folder = this.app.vault.getAbstractFileByPath(currentPath);
+            
+            if (dashboardFile instanceof TFile && folder instanceof TFolder) {
+                this.updateFolderDashboard(folder, dashboardFile);
+            }
+        }
     }
 }

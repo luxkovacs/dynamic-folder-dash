@@ -39,7 +39,8 @@ var DEFAULT_SETTINGS = {
   showFileModificationDate: false,
   customCSS: "",
   triggerMode: "command-only",
-  hideNotesInExplorer: true
+  hideNotesInExplorer: true,
+  welcomeMessage: '*This is a dynamic dashboard for the "{folder}" folder.*'
 };
 var DynamicFolderDashSettingTab = class extends import_obsidian.PluginSettingTab {
   constructor(app, plugin) {
@@ -72,6 +73,10 @@ var DynamicFolderDashSettingTab = class extends import_obsidian.PluginSettingTab
       await this.plugin.saveSettings();
       this.plugin.updateAllDashboards();
     }));
+    new import_obsidian.Setting(containerEl).setName("Default welcome message").setDesc("Template for the welcome message shown at the top of new dashboards. Use {folder} to insert the folder name.").addTextArea((text) => text.setValue(this.plugin.settings.welcomeMessage).onChange(async (value) => {
+      this.plugin.settings.welcomeMessage = value;
+      await this.plugin.saveSettings();
+    })).setClass("welcome-message-setting");
     containerEl.createEl("h3", { text: "Metadata Settings" });
     new import_obsidian.Setting(containerEl).setName("Include frontmatter").setDesc("When enabled, displays frontmatter properties in file listings.").addToggle((toggle) => toggle.setValue(this.plugin.settings.includeFrontmatter).onChange(async (value) => {
       this.plugin.settings.includeFrontmatter = value;
@@ -199,12 +204,47 @@ var DashboardManager = class {
       document.body.style.setProperty("--dynamic-folder-dash-display", "block");
     }
   }
+  updateDashboardsForFolder(folder) {
+    const dashboardPath = `${folder.path}/${folder.name}.md`;
+    const dashboardFile = this.app.vault.getAbstractFileByPath(dashboardPath);
+    if (dashboardFile instanceof import_obsidian2.TFile) {
+      this.plugin.updateFolderDashboard(folder, dashboardFile);
+    }
+  }
 };
 
 // main.ts
 var DynamicFolderDash = class extends import_obsidian3.Plugin {
+  constructor() {
+    super(...arguments);
+    this.pendingUpdates = /* @__PURE__ */ new Map();
+    this.updateDebounceMs = 500;
+  }
   async onload() {
     await this.loadSettings();
+    this.registerMarkdownCodeBlockProcessor("dynamic-folder", async (source, el, ctx) => {
+      const file = this.app.vault.getFileByPath(ctx.sourcePath);
+      if (!file)
+        return;
+      const folder = file.parent;
+      if (!folder)
+        return;
+      const content = document.createElement("div");
+      content.className = `dynamic-folder-dash ${this.settings.viewType}`;
+      switch (this.settings.viewType) {
+        case "card-view":
+          content.innerHTML = await this.generateCardView(folder);
+          break;
+        case "column-view":
+          content.innerHTML = await this.generateColumnView(folder);
+          break;
+        case "simple-list":
+        default:
+          content.innerHTML = await this.generateSimpleListView(folder);
+          break;
+      }
+      el.appendChild(content);
+    });
     this.dashboardManager = new DashboardManager(this.app, this);
     this.dashboardManager.initialize();
     this.dashboardManager.updateVisibility();
@@ -219,6 +259,12 @@ var DynamicFolderDash = class extends import_obsidian3.Plugin {
         }
       }
     });
+    this.registerEvent(this.app.vault.on("create", (file) => this.handleFileChange(file)));
+    this.registerEvent(this.app.vault.on("delete", (file) => this.handleFileChange(file)));
+    this.registerEvent(this.app.vault.on("rename", (file, oldPath) => {
+      this.handleFileChange(file);
+      this.updateDashboardsForPath(oldPath);
+    }));
     this.customStyleEl = document.createElement("style");
     document.head.appendChild(this.customStyleEl);
     this.updateCustomCSS();
@@ -269,17 +315,32 @@ var DynamicFolderDash = class extends import_obsidian3.Plugin {
     const dashboardPath = `${folder.path}/${dashboardName}`;
     const existingDashboard = this.app.vault.getAbstractFileByPath(dashboardPath);
     if (existingDashboard instanceof import_obsidian3.TFile) {
-      await this.updateFolderDashboard(folder, existingDashboard);
       await this.app.workspace.getLeaf().openFile(existingDashboard);
       return;
     }
-    const content = await this.generateDashboardContent(folder);
+    let welcomeMessage = this.settings.welcomeMessage || "";
+    welcomeMessage = welcomeMessage.replace(/{folder}/g, folder.name);
+    let content = "";
+    if (welcomeMessage.trim()) {
+      content += `${welcomeMessage}
+
+`;
+    }
+    content += "```dynamic-folder\n# This content updates automatically\n```\n";
     const newDashboard = await this.app.vault.create(dashboardPath, content);
     await this.app.workspace.getLeaf().openFile(newDashboard);
   }
   async updateFolderDashboard(folder, dashboardFile) {
-    const content = await this.generateDashboardContent(folder);
-    await this.app.vault.modify(dashboardFile, content);
+    const dashboardPath = dashboardFile.path;
+    if (this.pendingUpdates.has(dashboardPath)) {
+      window.clearTimeout(this.pendingUpdates.get(dashboardPath));
+    }
+    const timeoutId = window.setTimeout(async () => {
+      const content = await this.generateDashboardContent(folder);
+      await this.app.vault.modify(dashboardFile, content);
+      this.pendingUpdates.delete(dashboardPath);
+    }, this.updateDebounceMs);
+    this.pendingUpdates.set(dashboardPath, timeoutId);
   }
   async generateDashboardContent(folder) {
     const viewType = this.settings.viewType;
@@ -460,8 +521,17 @@ var DynamicFolderDash = class extends import_obsidian3.Plugin {
     const dashboardPath = `${parentFolder.path}/${parentFolder.name}.md`;
     const dashboardFile = this.app.vault.getAbstractFileByPath(dashboardPath);
     if (dashboardFile instanceof import_obsidian3.TFile) {
-      this.updateFolderDashboard(parentFolder, dashboardFile);
+      this.refreshOpenDashboardView(dashboardFile);
     }
+  }
+  refreshOpenDashboardView(dashboardFile) {
+    this.app.workspace.getLeavesOfType("markdown").forEach((leaf) => {
+      if (leaf.view instanceof import_obsidian3.MarkdownView) {
+        if (leaf.view.file && leaf.view.file.path === dashboardFile.path) {
+          leaf.view.previewMode.rerender(true);
+        }
+      }
+    });
   }
   handleFileRename(file, oldPath) {
     this.handleFileChange(file);
@@ -638,5 +708,21 @@ var DynamicFolderDash = class extends import_obsidian3.Plugin {
     if (!(folder instanceof import_obsidian3.TFolder))
       return null;
     return folder;
+  }
+  updateDashboardsForPath(path) {
+    const pathParts = path.split("/");
+    let currentPath = "";
+    for (const part of pathParts) {
+      if (currentPath) {
+        currentPath += "/";
+      }
+      currentPath += part;
+      const dashboardPath = `${currentPath}/${part}.md`;
+      const dashboardFile = this.app.vault.getAbstractFileByPath(dashboardPath);
+      const folder = this.app.vault.getAbstractFileByPath(currentPath);
+      if (dashboardFile instanceof import_obsidian3.TFile && folder instanceof import_obsidian3.TFolder) {
+        this.updateFolderDashboard(folder, dashboardFile);
+      }
+    }
   }
 };

@@ -149,4 +149,14 @@ export class DashboardManager {
             document.body.style.setProperty('--dynamic-folder-dash-display', 'block');
         }
     }
+
+    // Add this method to the DashboardManager class
+    updateDashboardsForFolder(folder: TFolder) {
+        const dashboardPath = `${folder.path}/${folder.name}.md`;
+        const dashboardFile = this.app.vault.getAbstractFileByPath(dashboardPath);
+        
+        if (dashboardFile instanceof TFile) {
+            this.plugin.updateFolderDashboard(folder, dashboardFile);
+        }
+    }
 }
