@@ -1,0 +1,9 @@
+{
+    "id": "dynamic-folder-dash",
+    "name": "Dynamic Folder Dashboard",
+    "version": "0.1.0",
+    "minAppVersion": "0.15.0",
+    "description": "Creates dynamic folder notes that update based on folder contents",
+    "author": "Luca Nowak",
+    "isDesktopOnly": false
+  }

@@ -1,0 +1,35 @@
+{
+  "name": "dynamic-folder-dash",
+  "version": "1.0.0",
+  "description": "Dynamic Folder Dashboard plugin for Obsidian",
+  "main": "index.js",
+  "scripts": {
+    "dev": "node esbuild.config.mjs",
+    "build": "tsc -noEmit -skipLibCheck && node esbuild.config.mjs production"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/luxkovacs/dynamic-folder-dash.git"
+  },
+  "keywords": [
+    "obsidian",
+    "plugin",
+    "dashboard",
+    "folder",
+    "folder notes"
+  ],
+  "author": "Luca Nowak",
+  "license": "MIT",
+  "bugs": {
+    "url": "https://github.com/luxkovacs/dynamic-folder-dash/issues"
+  },
+  "homepage": "https://github.com/luxkovacs/dynamic-folder-dash#readme",
+  "devDependencies": {
+    "@types/node": "^22.13.11",
+    "builtin-modules": "^5.0.0",
+    "esbuild": "0.14.47",
+    "obsidian": "^1.8.7",
+    "tslib": "2.4.0",
+    "typescript": "^5.8.2"
+  }
+}
